@@ -26,6 +26,7 @@ import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.training.exercises.common.datatypes.TaxiRide;
 import org.apache.flink.training.exercises.common.sources.TaxiRideGenerator;
+import org.apache.flink.training.exercises.common.utils.GeoUtils;
 import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
 
 /**
@@ -80,7 +81,14 @@ public class RideCleansingExercise {
     public static class NYCFilter implements FilterFunction<TaxiRide> {
         @Override
         public boolean filter(TaxiRide taxiRide) throws Exception {
-            throw new MissingSolutionException();
+            float startLat = taxiRide.startLat;
+            float startLon = taxiRide.startLon;
+
+            float endLat = taxiRide.endLat;
+            float endLon = taxiRide.endLon;
+            //开始和技术地点都在纽约
+           return GeoUtils.isInNYC(startLon,startLat) && GeoUtils.isInNYC(endLon,endLat);
+
         }
     }
 }

@@ -21,6 +21,10 @@ package org.apache.flink.training.exercises.longrides;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.JobExecutionResult;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
+import org.apache.flink.api.common.state.ValueState;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.DataStream;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -47,7 +51,9 @@ public class LongRidesExercise {
     private final SourceFunction<TaxiRide> source;
     private final SinkFunction<Long> sink;
 
-    /** Creates a job using the source and sink provided. */
+    /**
+     * Creates a job using the source and sink provided.
+     */
     public LongRidesExercise(SourceFunction<TaxiRide> source, SinkFunction<Long> sink) {
         this.source = source;
         this.sink = sink;
@@ -98,17 +104,48 @@ public class LongRidesExercise {
     @VisibleForTesting
     public static class AlertFunction extends KeyedProcessFunction<Long, TaxiRide, Long> {
 
+        final long towHour = 60 * 1000 * 120;
+
+        transient ValueState<Long> timeStampState;
+        transient ValueState<TaxiRide> rideState;
+
         @Override
         public void open(Configuration config) throws Exception {
-            throw new MissingSolutionException();
+            ValueStateDescriptor<Long> descriptor = new ValueStateDescriptor<>("time-stamp", Types.LONG);
+            ValueStateDescriptor<TaxiRide> taxiRideDescriptor = new ValueStateDescriptor<>("taxi-ride", TypeInformation.of(TaxiRide.class));
+            timeStampState = getRuntimeContext().getState(descriptor);
+            rideState = getRuntimeContext().getState(taxiRideDescriptor);
         }
 
         @Override
         public void processElement(TaxiRide ride, Context context, Collector<Long> out)
-                throws Exception {}
+                throws Exception {
+            //开始 绑定定时器，
+            if (ride.isStart) {
+                long timestamp = ride.getEventTimeMillis() + towHour;
+                timeStampState.update(timestamp);
+                rideState.update(ride);
+                context.timerService().registerEventTimeTimer(timestamp);
+            } else {
+                //结束 删除定时器
+                Long value = timeStampState.value();
+                if (value != null){
+                    context.timerService().deleteEventTimeTimer(value);
+                    timeStampState.clear();
+                    rideState.clear();
+                }
+
+            }
+        }
 
         @Override
         public void onTimer(long timestamp, OnTimerContext context, Collector<Long> out)
-                throws Exception {}
+                throws Exception {
+            //发出告警
+            System.out.println(rideState.value());
+            timeStampState.clear();
+            rideState.clear();
+
+        }
     }
 }

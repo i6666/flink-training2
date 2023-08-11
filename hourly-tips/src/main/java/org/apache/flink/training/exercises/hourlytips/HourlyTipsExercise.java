@@ -19,15 +19,23 @@
 package org.apache.flink.training.exercises.hourlytips;
 
 import org.apache.flink.api.common.JobExecutionResult;
+import org.apache.flink.api.common.eventtime.SerializableTimestampAssigner;
+import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.PrintSinkFunction;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
+import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.training.exercises.common.datatypes.TaxiFare;
 import org.apache.flink.training.exercises.common.sources.TaxiFareGenerator;
-import org.apache.flink.training.exercises.common.utils.MissingSolutionException;
+import org.apache.flink.util.Collector;
+
 
 /**
  * The Hourly Tips exercise from the Flink training.
@@ -40,7 +48,9 @@ public class HourlyTipsExercise {
     private final SourceFunction<TaxiFare> source;
     private final SinkFunction<Tuple3<Long, Long, Float>> sink;
 
-    /** Creates a job using the source and sink provided. */
+    /**
+     * Creates a job using the source and sink provided.
+     */
     public HourlyTipsExercise(
             SourceFunction<TaxiFare> source, SinkFunction<Tuple3<Long, Long, Float>> sink) {
 
@@ -63,6 +73,9 @@ public class HourlyTipsExercise {
 
     /**
      * Create and execute the hourly tips pipeline.
+     * 所希望的结果是每小时产生一个 Tuple3<Long, Long, Float> 记录的数据流。
+     * 这个记录（Tuple3<Long, Long, Float>）应包含该小时结束时的时间戳（对应三元组的第一个元素）、
+     * 该小时内获得小费最多的司机的 driverId（对应三元组的第二个元素）以及他的实际小费总数（对应三元组的第三个元素））。
      *
      * @return {JobExecutionResult}
      * @throws Exception which occurs during job execution.
@@ -73,19 +86,34 @@ public class HourlyTipsExercise {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
 
         // start the data generator
-        DataStream<TaxiFare> fares = env.addSource(source);
+        DataStream<TaxiFare> fares = env.addSource(source)
+                .assignTimestampsAndWatermarks(WatermarkStrategy.<TaxiFare>forMonotonousTimestamps()
+                        .withTimestampAssigner((SerializableTimestampAssigner<TaxiFare>) (element, recordTimestamp) -> element.getEventTimeMillis()));
+        //设置水印
 
-        // replace this with your solution
-        if (true) {
-            throw new MissingSolutionException();
-        }
+        DataStream<Tuple3<Long, Long, Float>> hoursTip = fares.keyBy(value -> value.driverId)
+                .window(TumblingEventTimeWindows.of(Time.hours(1)))
+                .process(new ProcessWindowFunction<TaxiFare, Tuple3<Long, Long, Float>, Long, TimeWindow>() {
+                    @Override
+                    public void process(Long key, ProcessWindowFunction<TaxiFare, Tuple3<Long, Long, Float>, Long, TimeWindow>.Context context, Iterable<TaxiFare> elements, Collector<Tuple3<Long, Long, Float>> out) {
+                        float sumTip = 0;
+                        for (TaxiFare element : elements) {
+                            sumTip += element.tip;
+                        }
+                        //应包含该小时结束时的时间戳（对应三元组的第一个元素）、
+                        //     *  该小时内获得小费最多的司机的 driverId（对应三元组的第二个元素）以及他的实际小费总数（对应三元组的第三个元素）
+                        out.collect(Tuple3.of(context.window().getEnd(), key, sumTip));
+                    }
+                });
+
+        SingleOutputStreamOperator<Tuple3<Long, Long, Float>> hourlyMax = hoursTip.keyBy(f -> f.f0).maxBy(1);
 
         // the results should be sent to the sink that was passed in
         // (otherwise the tests won't work)
         // you can end the pipeline with something like this:
 
         // DataStream<Tuple3<Long, Long, Float>> hourlyMax = ...
-        // hourlyMax.addSink(sink);
+        hourlyMax.addSink(sink);
 
         // execute the pipeline and return the result
         return env.execute("Hourly Tips");
